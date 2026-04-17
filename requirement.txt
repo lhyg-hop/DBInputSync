@@ -1,6 +1,6 @@
 Flask==2.3.3
 PyAutoGUI==0.9.54
 pyperclip==1.8.2
-requests==2.32.5
+psutil
 qrcode
 qrcode_terminal

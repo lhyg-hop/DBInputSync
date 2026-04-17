@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>跨网输入同步</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Microsoft YaHei", sans-serif;
+            color: #102027;
+            background:
+                radial-gradient(circle at top left, rgba(74, 222, 128, 0.25), transparent 35%),
+                radial-gradient(circle at top right, rgba(14, 165, 233, 0.2), transparent 30%),
+                linear-gradient(180deg, #f6fbf8 0%, #edf6f5 100%);
+            display: flex;
+            justify-content: center;
+            padding: 16px;
+        }
+        .app-shell {
+            width: min(100%, 860px);
+            display: grid;
+            gap: 14px;
+        }
+        .panel {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 18px;
+            box-shadow: 0 16px 50px rgba(15, 23, 42, 0.08);
+            padding: 16px;
+            backdrop-filter: blur(8px);
+        }
+        h1 {
+            margin: 0 0 8px;
+            font-size: 1.35rem;
+        }
+        p {
+            margin: 0;
+            color: #48616d;
+            line-height: 1.55;
+        }
+        textarea, input {
+            width: 100%;
+            border: 2px solid #b4d7cb;
+            border-radius: 16px;
+            padding: 18px;
+            font-size: 1.1rem;
+            background: #ffffff;
+            color: #102027;
+        }
+        textarea {
+            min-height: 230px;
+            resize: none;
+        }
+        .group {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(4, 1fr);
+        }
+        button {
+            border: none;
+            border-radius: 16px;
+            padding: 16px 14px;
+            min-height: 58px;
+            font-size: 1rem;
+            color: #ffffff;
+            cursor: pointer;
+            transition: transform 0.12s ease, opacity 0.12s ease;
+        }
+        button:active {
+            transform: translateY(1px) scale(0.985);
+            opacity: 0.92;
+        }
+        .primary { background: linear-gradient(135deg, #1f9d67, #117b5a); }
+        .secondary { background: linear-gradient(135deg, #0f8dcf, #2563eb); }
+        .danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+        .neutral { background: linear-gradient(135deg, #64748b, #475569); }
+        .dark { background: linear-gradient(135deg, #1f2937, #0f172a); }
+        .violet { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: #eefaf4;
+            color: #0f7a4d;
+            font-size: 0.95rem;
+        }
+        .status-pill.error {
+            background: #fff1f2;
+            color: #be123c;
+        }
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 18, 28, 0.54);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .overlay[hidden] { display: none; }
+        .overlay-card {
+            width: min(100%, 440px);
+            background: white;
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
+        }
+        .overlay-card h2 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 1.2rem;
+        }
+        .overlay-card p {
+            margin-bottom: 18px;
+        }
+        .symbol-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 18, 28, 0.54);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .symbol-modal.show { display: flex; }
+        .symbol-card {
+            width: min(100%, 460px);
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            display: grid;
+            gap: 12px;
+        }
+        .tip {
+            font-size: 0.95rem;
+            color: #48616d;
+        }
+        @media (max-width: 720px) {
+            .group { grid-template-columns: repeat(2, 1fr); }
+            textarea { min-height: 260px; font-size: 1.18rem; }
+            button { font-size: 1.05rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <section class="panel">
+            <h1>跨网输入同步</h1>
+            <p>继续使用手机输入法和语音输入，内容会同步到电脑当前光标位置。</p>
+            <div id="status-pill" class="status-pill">正在连接电脑…</div>
+        </section>
+
+        <section class="panel">
+            <textarea id="input-box" placeholder="请输入内容。回车发送，空文本回车表示电脑回车，空文本删除表示电脑退格。"></textarea>
+            <div class="group" style="margin-top: 12px;">
+                <button class="primary" onclick="sendText()">发送</button>
+                <button class="secondary" onclick="sendEnter()">回车</button>
+                <button class="neutral" id="undo-btn" onclick="undoLast()" disabled>撤销</button>
+                <button class="danger" onclick="clearInput()">清空</button>
+            </div>
+            <div class="group" style="margin-top: 12px;">
+                <button class="dark" onclick="moveCursor('left')">←</button>
+                <button class="dark" onclick="moveCursor('up')">↑</button>
+                <button class="dark" onclick="moveCursor('down')">↓</button>
+                <button class="dark" onclick="moveCursor('right')">→</button>
+            </div>
+            <div class="group" style="margin-top: 12px;">
+                <button class="violet" onclick="openSymbolModal('()')">（）</button>
+                <button class="violet" onclick="openSymbolModal('“”')">“”</button>
+                <button class="violet" onclick="openSymbolModal('「」')">「」</button>
+                <button class="violet" onclick="openSymbolModal('[]')">[]</button>
+            </div>
+            <div class="group" style="margin-top: 12px; grid-template-columns: 1fr;">
+                <button class="secondary" onclick="focusInputAndShowKeyboard()">唤起键盘</button>
+            </div>
+            <div class="tip" style="margin-top: 12px;">当前页面只在本次扫码会话中有效。若电脑端重启或断开，请重新扫码。</div>
+        </section>
+    </div>
+
+    <div id="pairing-overlay" class="overlay">
+        <div class="overlay-card">
+            <h2 id="overlay-title">正在建立安全连接</h2>
+            <p id="overlay-message">请稍候，正在验证当前二维码。</p>
+            <button class="primary" id="overlay-button" hidden onclick="window.location.reload()">重新尝试</button>
+        </div>
+    </div>
+
+    <div id="symbol-modal" class="symbol-modal">
+        <div class="symbol-card">
+            <input type="text" id="symbol-input" placeholder="输入要包裹的内容，回车确认。">
+            <button class="primary" onclick="confirmSymbol()">确认</button>
+        </div>
+    </div>
+
+    <script>
+        let authToken = "";
+        let hasHistory = false;
+        let currentSymbol = "";
+        let statusTimer = null;
+
+        function setStatus(message, isError = false) {
+            const pill = document.getElementById("status-pill");
+            pill.textContent = message;
+            pill.classList.toggle("error", isError);
+        }
+
+        function showOverlay(title, message, showReload = false) {
+            document.getElementById("overlay-title").textContent = title;
+            document.getElementById("overlay-message").textContent = message;
+            document.getElementById("overlay-button").hidden = !showReload;
+            document.getElementById("pairing-overlay").hidden = false;
+        }
+
+        function hideOverlay() {
+            document.getElementById("pairing-overlay").hidden = true;
+        }
+
+        function updateUndoBtn() {
+            document.getElementById("undo-btn").disabled = !hasHistory;
+        }
+
+        function clearInput() {
+            document.getElementById("input-box").value = "";
+        }
+
+        function focusInputAndShowKeyboard() {
+            const inputBox = document.getElementById("input-box");
+            inputBox.focus();
+            inputBox.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+
+        function openSymbolModal(symbol) {
+            currentSymbol = symbol;
+            const modal = document.getElementById("symbol-modal");
+            const input = document.getElementById("symbol-input");
+            input.value = "";
+            modal.classList.add("show");
+            setTimeout(() => input.focus(), 50);
+        }
+
+        function insertAtCursor(text) {
+            const input = document.getElementById("input-box");
+            const startPos = input.selectionStart;
+            const endPos = input.selectionEnd;
+            const value = input.value;
+            input.value = value.substring(0, startPos) + text + value.substring(endPos);
+            input.selectionStart = input.selectionEnd = startPos + text.length;
+            input.focus();
+        }
+
+        function confirmSymbol() {
+            const input = document.getElementById("symbol-input");
+            const content = input.value.trim();
+            document.getElementById("symbol-modal").classList.remove("show");
+            if (!content) {
+                return;
+            }
+            const leftSymbol = currentSymbol.substring(0, currentSymbol.length / 2);
+            const rightSymbol = currentSymbol.substring(currentSymbol.length / 2);
+            insertAtCursor(leftSymbol + content + rightSymbol);
+        }
+
+        async function fetchJson(path, options = {}) {
+            if (!authToken) {
+                throw new Error("当前会话尚未建立。");
+            }
+            const headers = Object.assign({}, options.headers || {}, { "Authorization": "Bearer " + authToken });
+            if (options.body && !headers["Content-Type"]) {
+                headers["Content-Type"] = "application/json";
+            }
+            const response = await fetch(path, Object.assign({}, options, { headers }));
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.message || "请求失败。");
+            }
+            return payload;
+        }
+
+        async function exchangePairCode(pairCode) {
+            const response = await fetch("/api/pair/exchange", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ pair_code: pairCode })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.message || "配对失败。");
+            }
+            authToken = payload.token;
+            sessionStorage.setItem("dbinputsync_auth", authToken);
+            history.replaceState(null, "", window.location.pathname);
+        }
+
+        async function restoreOrPair() {
+            const params = new URLSearchParams(window.location.search);
+            const pairCode = params.get("pair_code") || "";
+            const storedToken = sessionStorage.getItem("dbinputsync_auth");
+
+            try {
+                if (pairCode) {
+                    authToken = "";
+                    sessionStorage.removeItem("dbinputsync_auth");
+                    await exchangePairCode(pairCode);
+                } else if (storedToken) {
+                    authToken = storedToken;
+                    await fetchJson("/api/session/status");
+                } else {
+                    throw new Error("当前链接缺少配对参数，请回到电脑端重新扫码。");
+                }
+
+                hideOverlay();
+                setStatus("已安全连接到电脑");
+                startStatusPolling();
+            } catch (error) {
+                authToken = "";
+                sessionStorage.removeItem("dbinputsync_auth");
+                showOverlay("连接不可用", error.message || "连接失败，请重新扫码。", true);
+                setStatus("连接不可用", true);
+            }
+        }
+
+        function startStatusPolling() {
+            if (statusTimer) {
+                clearInterval(statusTimer);
+            }
+            statusTimer = setInterval(async () => {
+                try {
+                    const payload = await fetchJson("/api/session/status");
+                    setStatus(payload.remote_input_enabled ? "已安全连接到电脑" : "电脑端已暂停远程输入", !payload.remote_input_enabled);
+                } catch (error) {
+                    sessionStorage.removeItem("dbinputsync_auth");
+                    showOverlay("连接已断开", error.message || "连接不可用，请重新扫码。", true);
+                    setStatus("连接已断开", true);
+                }
+            }, 15000);
+        }
+
+        async function sendText() {
+            try {
+                const text = document.getElementById("input-box").value.trim();
+                if (!text) {
+                    return;
+                }
+                await fetchJson("/api/input/text", {
+                    method: "POST",
+                    body: JSON.stringify({ text })
+                });
+                document.getElementById("input-box").value = "";
+                hasHistory = true;
+                updateUndoBtn();
+            } catch (error) {
+                showOverlay("发送失败", error.message || "请重新扫码。", true);
+                setStatus("发送失败", true);
+            }
+        }
+
+        async function sendEnter() {
+            try {
+                await fetchJson("/api/input/key", {
+                    method: "POST",
+                    body: JSON.stringify({ key: "enter" })
+                });
+                hasHistory = true;
+                updateUndoBtn();
+            } catch (error) {
+                showOverlay("发送失败", error.message || "请重新扫码。", true);
+                setStatus("发送失败", true);
+            }
+        }
+
+        async function moveCursor(direction) {
+            try {
+                await fetchJson("/api/input/cursor", {
+                    method: "POST",
+                    body: JSON.stringify({ direction })
+                });
+                hasHistory = false;
+                updateUndoBtn();
+            } catch (error) {
+                showOverlay("操作失败", error.message || "请重新扫码。", true);
+                setStatus("操作失败", true);
+            }
+        }
+
+        async function sendDelete() {
+            try {
+                await fetchJson("/api/input/delete", { method: "POST" });
+                hasHistory = false;
+                updateUndoBtn();
+            } catch (error) {
+                showOverlay("删除失败", error.message || "请重新扫码。", true);
+                setStatus("删除失败", true);
+            }
+        }
+
+        async function undoLast() {
+            try {
+                const payload = await fetchJson("/api/input/undo", { method: "POST" });
+                document.getElementById("input-box").value = payload.content || "";
+                hasHistory = false;
+                updateUndoBtn();
+            } catch (error) {
+                showOverlay("撤销失败", error.message || "请重新扫码。", true);
+                setStatus("撤销失败", true);
+            }
+        }
+
+        document.getElementById("input-box").addEventListener("keydown", async function(event) {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                try {
+                    if (this.value.trim()) {
+                        await sendText();
+                    } else {
+                        await sendEnter();
+                    }
+                } catch (error) {
+                    showOverlay("发送失败", error.message || "请重新扫码。", true);
+                    setStatus("发送失败", true);
+                }
+            }
+
+            if (event.key === "Backspace" && !this.value.trim()) {
+                event.preventDefault();
+                try {
+                    await sendDelete();
+                } catch (error) {
+                    showOverlay("删除失败", error.message || "请重新扫码。", true);
+                    setStatus("删除失败", true);
+                }
+            }
+        });
+
+        document.getElementById("symbol-input").addEventListener("keydown", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                confirmSymbol();
+            }
+        });
+
+        document.getElementById("symbol-modal").addEventListener("click", function(event) {
+            if (event.target === this) {
+                this.classList.remove("show");
+            }
+        });
+
+        window.addEventListener("load", restoreOrPair);
+    </script>
+</body>
+</html>

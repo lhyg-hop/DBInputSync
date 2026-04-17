@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DBInputSync 控制面板</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Microsoft YaHei", sans-serif;
+            color: #102027;
+            background:
+                radial-gradient(circle at 15% 10%, rgba(34, 197, 94, 0.16), transparent 25%),
+                radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.18), transparent 30%),
+                linear-gradient(180deg, #f5faf8 0%, #eaf3f5 100%);
+            padding: 28px;
+        }
+        .shell {
+            width: min(1280px, 100%);
+            margin: 0 auto;
+            display: grid;
+            gap: 18px;
+        }
+        .hero {
+            background: linear-gradient(135deg, #0f766e, #155e75);
+            color: white;
+            border-radius: 24px;
+            padding: 28px;
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
+        }
+        .hero h1 { margin: 0 0 8px; font-size: 2rem; }
+        .hero p { margin: 0; opacity: 0.94; line-height: 1.55; }
+        .layout {
+            display: grid;
+            gap: 18px;
+        }
+        .connection-grid {
+            display: grid;
+            gap: 18px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.92);
+            border-radius: 22px;
+            padding: 22px;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+            backdrop-filter: blur(6px);
+        }
+        .card h2 {
+            margin-top: 0;
+            margin-bottom: 12px;
+            font-size: 1.2rem;
+        }
+        .label {
+            color: #48616d;
+            font-size: 0.95rem;
+            margin-top: 10px;
+        }
+        .value {
+            font-size: 1.05rem;
+            font-weight: 600;
+            word-break: break-word;
+            margin-top: 4px;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            background: #ebf8f2;
+            color: #0f7a4d;
+        }
+        .badge.error {
+            background: #fff1f2;
+            color: #be123c;
+        }
+        .badge.warn {
+            background: #fff7ed;
+            color: #c2410c;
+        }
+        .muted {
+            color: #5f7782;
+            line-height: 1.6;
+            font-size: 0.95rem;
+        }
+        .hint {
+            margin-top: 14px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: #eef6f8;
+            color: #34505b;
+            line-height: 1.6;
+        }
+        .actions {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            margin-top: 18px;
+        }
+        .channel-actions {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            margin-top: 16px;
+        }
+        button {
+            border: none;
+            border-radius: 16px;
+            padding: 14px 16px;
+            min-height: 54px;
+            cursor: pointer;
+            color: white;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .primary { background: linear-gradient(135deg, #059669, #0f766e); }
+        .secondary { background: linear-gradient(135deg, #0284c7, #2563eb); }
+        .danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+        .neutral { background: linear-gradient(135deg, #64748b, #475569); }
+        .qr-frame {
+            border-radius: 20px;
+            background: linear-gradient(180deg, #ffffff 0%, #f5fbf9 100%);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            min-height: 280px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            margin-top: 14px;
+        }
+        .qr-frame img {
+            width: min(100%, 320px);
+            height: auto;
+            display: block;
+        }
+        code {
+            display: block;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-family: Consolas, monospace;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+        .log-box {
+            max-height: 220px;
+            overflow: auto;
+        }
+        @media (max-width: 980px) {
+            .connection-grid { grid-template-columns: 1fr; }
+            .actions, .channel-actions { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <section class="hero">
+            <h1>跨网输入同步控制面板</h1>
+            <p>局域网和跨网双通道同时准备。同一 Wi‑Fi / 同一局域网时优先使用局域网二维码；不同网络时使用 Cloudflare Quick Tunnel。</p>
+        </section>
+
+        <section class="card">
+            <h2>全局状态</h2>
+            <div class="label">本地控制台</div>
+            <div class="value" id="local-control-url">-</div>
+            <div class="label">配对码剩余有效期</div>
+            <div class="value" id="pair-expiry">-</div>
+            <div class="label">当前活跃会话数</div>
+            <div class="value" id="session-count">0</div>
+            <div class="actions">
+                <button class="secondary" onclick="regeneratePairCode()">重新生成二维码</button>
+                <button class="neutral" id="pause-btn" onclick="togglePause()">暂停远程输入</button>
+                <button class="danger" onclick="disconnectTunnel()">紧急断开跨网隧道</button>
+                <button class="secondary" onclick="restartTunnel()">重新连接跨网隧道</button>
+            </div>
+        </section>
+
+        <section class="connection-grid">
+            <div class="card">
+                <h2>局域网直连</h2>
+                <div class="muted">手机和电脑在同一 Wi‑Fi / 同一局域网时，优先扫这个二维码。</div>
+                <div class="label">状态</div>
+                <div class="value"><span id="lan-badge" class="badge">-</span></div>
+                <div class="label">局域网地址</div>
+                <div class="value" id="lan-url">等待检测…</div>
+                <div class="label">网卡</div>
+                <div class="value" id="lan-interface">-</div>
+                <div class="channel-actions">
+                    <button class="primary" onclick="copyLanUrl()">复制局域网链接</button>
+                    <button class="secondary" onclick="refreshLan()">刷新局域网地址</button>
+                </div>
+                <div class="qr-frame" id="lan-qr-frame">
+                    <span class="muted">等待二维码…</span>
+                </div>
+                <div class="hint" id="lan-hint">同网优先使用局域网直连，不依赖外部隧道。</div>
+            </div>
+
+            <div class="card">
+                <h2>跨网连接（Cloudflare Quick Tunnel）</h2>
+                <div class="muted">手机和电脑不在同一网络时，扫这个二维码。部分国内/企业网络下可能被拦。</div>
+                <div class="label">状态</div>
+                <div class="value"><span id="tunnel-badge" class="badge">-</span></div>
+                <div class="label">跨网地址</div>
+                <div class="value" id="tunnel-url">等待隧道建立…</div>
+                <div class="label">错误提示</div>
+                <div class="value" id="tunnel-error">-</div>
+                <div class="channel-actions">
+                    <button class="primary" onclick="copyTunnelUrl()">复制跨网链接</button>
+                    <button class="secondary" onclick="restartTunnel()">重新连接跨网隧道</button>
+                </div>
+                <div class="qr-frame" id="tunnel-qr-frame">
+                    <span class="muted">等待二维码…</span>
+                </div>
+                <div class="hint" id="tunnel-hint">异网优先用这个入口。如果该入口失败，但手机和电脑在同网，请改扫左边的局域网二维码。</div>
+            </div>
+        </section>
+
+        <section class="connection-grid">
+            <div class="card">
+                <h2>运行提示</h2>
+                <code id="summary-box">正在读取状态…</code>
+            </div>
+            <div class="card">
+                <h2>跨网隧道输出</h2>
+                <div class="log-box">
+                    <code id="log-box">暂无输出</code>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        async function fetchState() {
+            const response = await fetch("/api/admin/state");
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload.message || "状态获取失败");
+            }
+            return payload;
+        }
+
+        async function postJson(path, payload = {}) {
+            const response = await fetch(path, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.message || "请求失败");
+            }
+            return data;
+        }
+
+        function formatBadge(elementId, status) {
+            const badge = document.getElementById(elementId);
+            badge.className = "badge";
+            if (status === "running") {
+                badge.textContent = "运行中";
+            } else if (status === "starting") {
+                badge.textContent = "连接中";
+                badge.classList.add("warn");
+            } else if (status === "error") {
+                badge.textContent = "异常";
+                badge.classList.add("error");
+            } else {
+                badge.textContent = "未就绪";
+                badge.classList.add("warn");
+            }
+        }
+
+        function renderQr(containerId, dataUri) {
+            const frame = document.getElementById(containerId);
+            if (dataUri) {
+                frame.innerHTML = '<img src="' + dataUri + '" alt="二维码">';
+            } else {
+                frame.innerHTML = '<span class="muted">等待二维码…</span>';
+            }
+        }
+
+        function renderSummary(state) {
+            const summary = [
+                "本地控制台: " + state.service.local_control_url,
+                "局域网状态: " + state.lan.status,
+                "局域网地址: " + (state.lan.pair_url || "不可用"),
+                "跨网状态: " + state.tunnel.status,
+                "跨网地址: " + (state.pairing.tunnel_pair_url || "不可用"),
+                "远程输入: " + (state.service.remote_input_enabled ? "已启用" : "已暂停"),
+                "会话数量: " + state.service.session_count
+            ];
+            if (state.lan.error) {
+                summary.push("局域网提示: " + state.lan.error);
+            }
+            if (state.tunnel.error) {
+                summary.push("跨网提示: " + state.tunnel.error);
+            }
+            document.getElementById("summary-box").textContent = summary.join("\n");
+        }
+
+        function renderState(state) {
+            window.latestState = state;
+            document.getElementById("local-control-url").textContent = state.service.local_control_url;
+            document.getElementById("pair-expiry").textContent = state.pairing.expires_in + " 秒";
+            document.getElementById("session-count").textContent = String(state.service.session_count);
+            document.getElementById("pause-btn").textContent = state.service.remote_input_enabled ? "暂停远程输入" : "恢复远程输入";
+
+            formatBadge("lan-badge", state.lan.status);
+            document.getElementById("lan-url").textContent = state.lan.pair_url || "未检测到可用局域网地址";
+            document.getElementById("lan-interface").textContent = state.lan.interface_name || "-";
+            document.getElementById("lan-hint").textContent = state.lan.error || "同网优先使用局域网直连，不依赖外部隧道。";
+            renderQr("lan-qr-frame", state.lan.qr_data_uri);
+
+            formatBadge("tunnel-badge", state.tunnel.status);
+            document.getElementById("tunnel-url").textContent = state.pairing.tunnel_pair_url || "等待隧道建立…";
+            document.getElementById("tunnel-error").textContent = state.tunnel.error || "当前未报错";
+            document.getElementById("tunnel-hint").textContent = state.tunnel.error || "异网优先使用 Cloudflare Quick Tunnel。";
+            document.getElementById("log-box").textContent = state.tunnel.log_tail.length ? state.tunnel.log_tail.join("\n") : "暂无输出";
+            renderQr("tunnel-qr-frame", state.pairing.tunnel_qr_data_uri);
+
+            renderSummary(state);
+        }
+
+        async function refreshState() {
+            try {
+                renderState(await fetchState());
+            } catch (error) {
+                document.getElementById("summary-box").textContent = error.message || "状态获取失败";
+            }
+        }
+
+        async function regeneratePairCode() {
+            await postJson("/api/admin/pair/regenerate");
+            await refreshState();
+        }
+
+        async function togglePause() {
+            const enabled = !!(window.latestState && window.latestState.service.remote_input_enabled);
+            await postJson("/api/admin/pause", { enabled: !enabled });
+            await refreshState();
+        }
+
+        async function disconnectTunnel() {
+            await postJson("/api/admin/disconnect");
+            await refreshState();
+        }
+
+        async function restartTunnel() {
+            await postJson("/api/admin/tunnel/restart");
+            await refreshState();
+        }
+
+        async function refreshLan() {
+            await postJson("/api/admin/lan/refresh");
+            await refreshState();
+        }
+
+        async function copyLanUrl() {
+            if (!window.latestState || !window.latestState.lan.pair_url) {
+                return;
+            }
+            await navigator.clipboard.writeText(window.latestState.lan.pair_url);
+        }
+
+        async function copyTunnelUrl() {
+            if (!window.latestState || !window.latestState.pairing.tunnel_pair_url) {
+                return;
+            }
+            await navigator.clipboard.writeText(window.latestState.pairing.tunnel_pair_url);
+        }
+
+        window.addEventListener("load", () => {
+            refreshState();
+            setInterval(refreshState, 3000);
+        });
+    </script>
+</body>
+</html>

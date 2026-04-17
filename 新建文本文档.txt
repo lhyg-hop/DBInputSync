@@ -1,0 +1,2 @@
+cd C:\Users\kaka\Documents\doubao\DBInputSync
+.\.venv\Scripts\python main.py
