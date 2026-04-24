@@ -11,6 +11,7 @@ import threading
 import time
 from collections import deque
 from functools import wraps
+from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, urlparse
 
@@ -38,7 +39,21 @@ ALLOWED_CURSOR_DIRECTIONS = {"left", "up", "down", "right"}
 ALLOWED_KEYS = {"enter"}
 HOT_RULE_FILE = "hot-rule.txt"
 
-app = Flask(__name__)
+
+def app_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def resource_dir(name: str) -> str:
+    bundle_root = Path(getattr(sys, "_MEIPASS", app_base_dir()))
+    return str((bundle_root / name).resolve())
+
+
+APP_BASE_DIR = app_base_dir()
+
+app = Flask(__name__, template_folder=resource_dir("templates"))
 REPLACE_RULES = []
 
 
@@ -68,12 +83,7 @@ def is_local_host(host: str) -> bool:
 
 
 def load_replace_rules():
-    if getattr(sys, "frozen", False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
-    rule_path = os.path.join(base_dir, HOT_RULE_FILE)
+    rule_path = str((APP_BASE_DIR / HOT_RULE_FILE).resolve())
     if not os.path.exists(rule_path):
         print(f"未找到替换规则文件：{rule_path}")
         return
@@ -376,6 +386,9 @@ class CloudflaredTunnelProvider(TunnelProvider):
 
     def _find_executable(self):
         candidates = []
+        bundled_path = APP_BASE_DIR / "cloudflared.exe"
+        candidates.append(str(bundled_path))
+
         path_hit = shutil.which("cloudflared")
         if path_hit:
             candidates.append(path_hit)
