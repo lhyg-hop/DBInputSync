@@ -59,6 +59,7 @@ echo [build] Preparing portable package...
 copy /y "%ROOT%release-start.bat" "%DIST_DIR%\start.bat" >nul
 copy /y "%ROOT%README.md" "%DIST_DIR%\README.md" >nul
 copy /y "%ROOT%LICENSE" "%DIST_DIR%\LICENSE" >nul
+copy /y "%ROOT%dbsync.example.ini" "%DIST_DIR%\dbsync.example.ini" >nul
 
 echo [build] Creating zip archive...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^

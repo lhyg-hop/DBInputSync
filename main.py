@@ -1,4 +1,5 @@
 import base64
+import configparser
 import io
 import os
 import re
@@ -52,6 +53,46 @@ def resource_dir(name: str) -> str:
 
 
 APP_BASE_DIR = app_base_dir()
+CONFIG_FILE_NAME = "dbsync.ini"
+
+
+def load_runtime_config():
+    config = configparser.ConfigParser()
+    config_path = APP_BASE_DIR / CONFIG_FILE_NAME
+    if config_path.exists():
+        config.read(config_path, encoding="utf-8")
+    return config
+
+
+RUNTIME_CONFIG = load_runtime_config()
+
+
+def get_config_value(section: str, option: str, env_name: str, default: str = "") -> str:
+    env_value = os.environ.get(env_name)
+    if env_value is not None:
+        return env_value.strip()
+    if RUNTIME_CONFIG.has_option(section, option):
+        return RUNTIME_CONFIG.get(section, option).strip()
+    return default
+
+
+def parse_csv_values(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def normalize_public_url(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if not re.match(r"^https?://", value, re.IGNORECASE):
+        value = f"https://{value}"
+    return value.rstrip("/")
+
+
+def provider_preference() -> list[str]:
+    configured = get_config_value("tunnel", "provider_priority", "DBSYNC_TUNNEL_PROVIDER_PRIORITY", "cloudflare,openfrp")
+    values = parse_csv_values(configured.lower())
+    return values or ["cloudflare", "openfrp"]
 
 app = Flask(__name__, template_folder=resource_dir("templates"))
 REPLACE_RULES = []
@@ -272,6 +313,40 @@ class TunnelProvider:
         raise NotImplementedError
 
 
+class ProcessTunnelProvider(TunnelProvider):
+    PROVIDER_NAME = "process"
+    PROVIDER_LABEL = "Process Tunnel"
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.process = None
+        self.status = "stopped"
+        self.public_url = None
+        self.error = None
+        self.log_tail = deque(maxlen=20)
+
+    def provider_name(self) -> str:
+        return self.PROVIDER_NAME
+
+    def provider_label(self) -> str:
+        return self.PROVIDER_LABEL
+
+    def _base_snapshot(self):
+        return {
+            "provider_name": self.provider_name(),
+            "provider_label": self.provider_label(),
+            "status": self.status,
+            "public_url": self.public_url,
+            "public_host": split_host(self.public_url or ""),
+            "error": self.error,
+            "log_tail": list(self.log_tail),
+        }
+
+    def snapshot(self):
+        with self.lock:
+            return self._base_snapshot()
+
+
 class LanAccessProvider:
     VIRTUAL_HINTS = ("virtual", "vmware", "hyper-v", "loopback", "tunnel", "vpn", "singbox", "tap", "wintun")
 
@@ -372,17 +447,14 @@ class LanAccessProvider:
             }
 
 
-class CloudflaredTunnelProvider(TunnelProvider):
+class CloudflaredTunnelProvider(ProcessTunnelProvider):
     URL_PATTERN = re.compile(r"https://[-a-zA-Z0-9]+\.trycloudflare\.com")
+    PROVIDER_NAME = "cloudflare"
+    PROVIDER_LABEL = "Cloudflare Quick Tunnel"
 
     def __init__(self, target_url: str):
+        super().__init__()
         self.target_url = target_url
-        self.lock = threading.Lock()
-        self.process = None
-        self.status = "stopped"
-        self.public_url = None
-        self.error = None
-        self.log_tail = deque(maxlen=20)
 
     def _find_executable(self):
         candidates = []
@@ -515,19 +587,192 @@ class CloudflaredTunnelProvider(TunnelProvider):
             self.error = None
 
     def snapshot(self):
+        return super().snapshot()
+
+
+class OpenFrpTunnelProvider(ProcessTunnelProvider):
+    PROVIDER_NAME = "openfrp"
+    PROVIDER_LABEL = "OpenFrp / FRP"
+
+    def __init__(self, target_url: str):
+        super().__init__()
+        self.target_url = target_url
+        self.token = get_config_value("openfrp", "token", "DBSYNC_OPENFRP_TOKEN", "")
+        self.proxy_ids = get_config_value("openfrp", "proxy_ids", "DBSYNC_OPENFRP_PROXY_IDS", "")
+        self.public_url = normalize_public_url(
+            get_config_value("openfrp", "public_url", "DBSYNC_OPENFRP_PUBLIC_URL", "")
+        ) or None
+        self.executable_hint = get_config_value("openfrp", "executable", "DBSYNC_OPENFRP_EXECUTABLE", "")
+
+    def _find_executable(self):
+        candidates = []
+        if self.executable_hint:
+            candidates.append(self.executable_hint)
+            if not os.path.isabs(self.executable_hint):
+                candidates.append(str((APP_BASE_DIR / self.executable_hint).resolve()))
+        bundled_candidates = [
+            APP_BASE_DIR / "openfrpc.exe",
+            APP_BASE_DIR / "frpc.exe",
+            APP_BASE_DIR / "frpc_windows_amd64.exe",
+        ]
+        candidates.extend([str(path) for path in bundled_candidates])
+        for program_name in ("openfrpc", "frpc"):
+            path_hit = shutil.which(program_name)
+            if path_hit:
+                candidates.append(path_hit)
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def _is_configured(self):
+        return bool(self.token and self.proxy_ids and self.public_url)
+
+    def start(self):
         with self.lock:
-            return {
-                "status": self.status,
-                "public_url": self.public_url,
-                "public_host": split_host(self.public_url or ""),
-                "error": self.error,
-                "log_tail": list(self.log_tail),
-            }
+            if self.process and self.process.poll() is None:
+                return True
+            if not self._is_configured():
+                self.status = "disabled"
+                self.error = "未配置 OpenFrp。请在 dbsync.ini 或环境变量中填写 token、proxy_ids 和 public_url。"
+                return False
+            executable = self._find_executable()
+            if not executable:
+                self.status = "error"
+                self.error = "未找到 OpenFrp/frpc 客户端，请将 openfrpc.exe 或 frpc.exe 放到程序目录，或在配置中指定 executable。"
+                return False
+
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                self.process = subprocess.Popen(
+                    [executable, "-u", self.token, "-p", self.proxy_ids],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    creationflags=flags,
+                )
+            except OSError as exc:
+                self.status = "error"
+                self.error = f"启动 OpenFrp 失败：{exc}"
+                self.process = None
+                return False
+
+            self.status = "starting"
+            self.error = None
+            threading.Thread(target=self._consume_output, args=(self.process,), daemon=True).start()
+            threading.Thread(target=self._mark_running_if_alive, args=(self.process,), daemon=True).start()
+            return True
+
+    def _mark_running_if_alive(self, process):
+        time.sleep(2)
+        with self.lock:
+            if self.process is process and process.poll() is None and self.status == "starting":
+                self.status = "running"
+                self.error = None
+
+    def _consume_output(self, process):
+        for raw_line in process.stdout or []:
+            line = raw_line.strip()
+            if not line:
+                continue
+            with self.lock:
+                self.log_tail.append(line)
+                if self.process is process and self.status == "starting":
+                    self.status = "running"
+                    self.error = None
+        return_code = process.wait()
+        with self.lock:
+            if self.process is not process:
+                return
+            self.process = None
+            if self.status == "stopping":
+                self.status = "stopped"
+                self.error = None
+            else:
+                self.status = "error"
+                self.error = f"OpenFrp 已退出（code {return_code}）。"
+
+    def stop(self):
+        with self.lock:
+            process = self.process
+            if not process:
+                if self.status != "disabled":
+                    self.status = "stopped"
+                    self.error = None
+                return
+            self.status = "stopping"
+
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+        with self.lock:
+            self.process = None
+            self.status = "stopped"
+            self.error = None
+
+    def snapshot(self):
+        return super().snapshot()
+
+
+class MultiTunnelProvider(TunnelProvider):
+    def __init__(self, providers: list[TunnelProvider], priority: list[str]):
+        self.providers = {provider.provider_name(): provider for provider in providers}
+        self.priority = [name for name in priority if name in self.providers]
+        for name in self.providers:
+            if name not in self.priority:
+                self.priority.append(name)
+
+    def start(self):
+        started = False
+        for name in self.priority:
+            started = self.providers[name].start() or started
+        return started
+
+    def stop(self):
+        for provider in self.providers.values():
+            provider.stop()
+
+    def restart(self):
+        self.stop()
+        return self.start()
+
+    def snapshot(self):
+        snapshots = {name: provider.snapshot() for name, provider in self.providers.items()}
+        active = None
+        for status_name in ("running", "starting"):
+            for name in self.priority:
+                if snapshots[name]["status"] == status_name and snapshots[name].get("public_url"):
+                    active = name
+                    break
+            if active:
+                break
+        if not active:
+            for name in self.priority:
+                if snapshots[name].get("public_url"):
+                    active = name
+                    break
+        if not active and self.priority:
+            active = self.priority[0]
+
+        selected = dict(snapshots.get(active, {}))
+        selected["provider_name"] = active or selected.get("provider_name", "")
+        selected["provider_label"] = selected.get("provider_label", "Unavailable")
+        selected["providers"] = snapshots
+        return selected
 
 
 input_executor = InputExecutor()
 session_manager = SessionManager()
-tunnel_provider = CloudflaredTunnelProvider(f"http://{LOCAL_HOST}:{PORT}")
+cloudflare_provider = CloudflaredTunnelProvider(f"http://{LOCAL_HOST}:{PORT}")
+openfrp_provider = OpenFrpTunnelProvider(f"http://{LOCAL_HOST}:{PORT}")
+tunnel_provider = MultiTunnelProvider([cloudflare_provider, openfrp_provider], provider_preference())
 lan_provider = LanAccessProvider(PORT)
 load_replace_rules()
 

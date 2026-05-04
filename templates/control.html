@@ -163,7 +163,7 @@
     <div class="shell">
         <section class="hero">
             <h1>跨网输入同步控制面板</h1>
-            <p>局域网和跨网双通道同时准备。同一 Wi‑Fi / 同一局域网时优先使用局域网二维码；不同网络时使用 Cloudflare Quick Tunnel。</p>
+            <p>局域网和跨网双通道同时准备。同一 Wi‑Fi / 同一局域网时优先使用局域网二维码；不同网络时自动优先使用你配置好的国内隧道，未配置时再尝试 Cloudflare。</p>
         </section>
 
         <section class="card">
@@ -203,10 +203,12 @@
             </div>
 
             <div class="card">
-                <h2>跨网连接（Cloudflare Quick Tunnel）</h2>
-                <div class="muted">手机和电脑不在同一网络时，扫这个二维码。部分国内/企业网络下可能被拦。</div>
+                <h2>跨网连接（自动选择）</h2>
+                <div class="muted">手机和电脑不在同一网络时，扫这个二维码。优先使用你配置好的国内通道，未配置时回退到 Cloudflare。</div>
                 <div class="label">状态</div>
                 <div class="value"><span id="tunnel-badge" class="badge">-</span></div>
+                <div class="label">当前通道</div>
+                <div class="value" id="tunnel-provider">-</div>
                 <div class="label">跨网地址</div>
                 <div class="value" id="tunnel-url">等待隧道建立…</div>
                 <div class="label">错误提示</div>
@@ -218,7 +220,7 @@
                 <div class="qr-frame" id="tunnel-qr-frame">
                     <span class="muted">等待二维码…</span>
                 </div>
-                <div class="hint" id="tunnel-hint">异网优先用这个入口。如果该入口失败，但手机和电脑在同网，请改扫左边的局域网二维码。</div>
+                <div class="hint" id="tunnel-hint">异网优先用这个入口。如果你在国内网络下使用，建议先在 dbsync.ini 中配置 OpenFrp。</div>
             </div>
         </section>
 
@@ -290,6 +292,7 @@
                 "本地控制台: " + state.service.local_control_url,
                 "局域网状态: " + state.lan.status,
                 "局域网地址: " + (state.lan.pair_url || "不可用"),
+                "跨网通道: " + (state.tunnel.provider_label || "-"),
                 "跨网状态: " + state.tunnel.status,
                 "跨网地址: " + (state.pairing.tunnel_pair_url || "不可用"),
                 "远程输入: " + (state.service.remote_input_enabled ? "已启用" : "已暂停"),
@@ -318,9 +321,10 @@
             renderQr("lan-qr-frame", state.lan.qr_data_uri);
 
             formatBadge("tunnel-badge", state.tunnel.status);
+            document.getElementById("tunnel-provider").textContent = state.tunnel.provider_label || "-";
             document.getElementById("tunnel-url").textContent = state.pairing.tunnel_pair_url || "等待隧道建立…";
             document.getElementById("tunnel-error").textContent = state.tunnel.error || "当前未报错";
-            document.getElementById("tunnel-hint").textContent = state.tunnel.error || "异网优先使用 Cloudflare Quick Tunnel。";
+            document.getElementById("tunnel-hint").textContent = state.tunnel.error || ("当前跨网通道：" + (state.tunnel.provider_label || "自动选择"));
             document.getElementById("log-box").textContent = state.tunnel.log_tail.length ? state.tunnel.log_tail.join("\n") : "暂无输出";
             renderQr("tunnel-qr-frame", state.pairing.tunnel_qr_data_uri);
 
